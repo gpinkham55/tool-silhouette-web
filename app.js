@@ -18,6 +18,7 @@ const els = {
   minArea: document.getElementById('minArea'),
   morphOpen: document.getElementById('morphOpen'),
   morphClose: document.getElementById('morphClose'),
+  offsetMm: document.getElementById('offsetMm'),
   invert: document.getElementById('invert'),
   includeBorder: document.getElementById('includeBorder'),
   showOrig: document.getElementById('showOrig'),
@@ -33,6 +34,7 @@ const els = {
   minAreaV: document.getElementById('minAreaV'),
   morphOpenV: document.getElementById('morphOpenV'),
   morphCloseV: document.getElementById('morphCloseV'),
+  offsetMmV: document.getElementById('offsetMmV'),
 };
 
 const state = {
@@ -55,7 +57,7 @@ window.onOpenCvReady = () => {
   }, 50);
 };
 
-for (const k of ['blur','threshOff','margin','minArea','morphOpen','morphClose']) {
+for (const k of ['blur','threshOff','margin','minArea','morphOpen','morphClose','offsetMm']) {
   els[k].addEventListener('input', () => { els[k + 'V'].textContent = els[k].value; });
 }
 
@@ -132,7 +134,7 @@ els.processBtn.addEventListener('click', processImage);
 ['invert','includeBorder','showOrig','showGrid'].forEach(id => {
   els[id].addEventListener('change', () => { if (state.warped) detect(); });
 });
-['blur','threshOff','margin','minArea','morphOpen','morphClose'].forEach(id => {
+['blur','threshOff','margin','minArea','morphOpen','morphClose','offsetMm'].forEach(id => {
   els[id].addEventListener('input', debounce(() => { if (state.warped) detect(); }, 150));
 });
 
@@ -208,6 +210,19 @@ function detect() {
     k.delete();
   }
 
+  // Outward offset (kerf + clearance) in mm → dilate binary by exact px amount.
+  // px_per_mm = W / (gridW_in * 25.4). Kernel radius = offset_mm * px_per_mm.
+  const offsetMm = parseFloat(els.offsetMm.value);
+  if (offsetMm > 0) {
+    const gridW_in = parseFloat(els.gridW.value);
+    const pxPerMm = W / (gridW_in * MM_PER_INCH);
+    const radiusPx = Math.max(1, Math.round(offsetMm * pxPerMm));
+    const ks = odd(2 * radiusPx + 1);
+    const k = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(ks, ks));
+    cv.dilate(bin, bin, k);
+    k.delete();
+  }
+
   const contours = new cv.MatVector();
   const hier = new cv.Mat();
   // CHAIN_APPROX_NONE: dense points matching reference SVG.
@@ -231,7 +246,7 @@ function detect() {
   gray.delete(); blurred.delete(); bin.delete(); contours.delete(); hier.delete();
 
   state.polygons = polys;
-  els.countHud.textContent = `${polys.length} outlines · thr=${thrVal}`;
+  els.countHud.textContent = `${polys.length} outlines · thr=${thrVal} · +${parseFloat(els.offsetMm.value).toFixed(2)}mm`;
   renderPreview();
 }
 
