@@ -12,6 +12,8 @@ const els = {
   srcCanvas: document.getElementById('srcCanvas'),
   outCanvas: document.getElementById('outCanvas'),
   reset: document.getElementById('resetCorners'),
+  redetect: document.getElementById('redetect'),
+  detectStatus: document.getElementById('detectStatus'),
   blur: document.getElementById('blur'),
   threshOff: document.getElementById('threshOff'),
   margin: document.getElementById('margin'),
@@ -70,16 +72,87 @@ els.file.addEventListener('change', (e) => {
     state.corners = [];
     if (state.srcMat) { state.srcMat.delete(); state.srcMat = null; }
     drawSource();
-    updateProcessBtn();
+    autoDetect();
   };
   img.src = URL.createObjectURL(f);
 });
 
 els.reset.addEventListener('click', () => {
   state.corners = [];
+  els.detectStatus.textContent = '';
   drawSource();
   updateProcessBtn();
 });
+
+els.redetect.addEventListener('click', autoDetect);
+
+function autoDetect() {
+  if (!state.img || !state.cvReady) return;
+  const tmp = document.createElement('canvas');
+  tmp.width = state.img.naturalWidth; tmp.height = state.img.naturalHeight;
+  tmp.getContext('2d').drawImage(state.img, 0, 0);
+  if (state.srcMat) state.srcMat.delete();
+  state.srcMat = cv.imread(tmp);
+
+  const quad = detectGridQuad(state.srcMat);
+  if (quad) {
+    state.corners = quad;
+    els.detectStatus.innerHTML = '<span style="color:#4ade80">✓ auto-detected</span>';
+    drawSource();
+    updateProcessBtn();
+    processImage(); // auto-process
+  } else {
+    state.corners = [];
+    els.detectStatus.innerHTML = '<span style="color:#fbbf24">⚠ auto-detect failed — click 4 corners manually</span>';
+    drawSource();
+    updateProcessBtn();
+  }
+}
+
+function orderCorners(pts) {
+  const sum = pts.map(p => p.x + p.y);
+  const diff = pts.map(p => p.y - p.x);
+  const argmin = (a) => a.indexOf(Math.min(...a));
+  const argmax = (a) => a.indexOf(Math.max(...a));
+  return [pts[argmin(sum)], pts[argmin(diff)], pts[argmax(sum)], pts[argmax(diff)]];
+}
+
+function detectGridQuad(srcMat) {
+  const gray = new cv.Mat();
+  cv.cvtColor(srcMat, gray, cv.COLOR_RGBA2GRAY);
+  const blur = new cv.Mat();
+  cv.GaussianBlur(gray, blur, new cv.Size(5,5), 0);
+  const thr = new cv.Mat();
+  cv.threshold(blur, thr, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+  const contours = new cv.MatVector();
+  const hier = new cv.Mat();
+  cv.findContours(thr, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+  const imgArea = srcMat.rows * srcMat.cols;
+  let best = null, bestArea = 0;
+  for (let i = 0; i < contours.size(); i++) {
+    const c = contours.get(i);
+    const area = cv.contourArea(c);
+    if (area < 0.2 * imgArea) { c.delete(); continue; }
+    const peri = cv.arcLength(c, true);
+    const approx = new cv.Mat();
+    cv.approxPolyDP(c, approx, 0.02 * peri, true);
+    if (approx.rows === 4 && area > bestArea) {
+      if (best) best.delete();
+      best = approx;
+      bestArea = area;
+    } else {
+      approx.delete();
+    }
+    c.delete();
+  }
+  gray.delete(); blur.delete(); thr.delete(); contours.delete(); hier.delete();
+  if (!best) return null;
+  const data = best.data32S;
+  const pts = [];
+  for (let k = 0; k < 4; k++) pts.push({ x: data[k*2], y: data[k*2+1] });
+  best.delete();
+  return orderCorners(pts);
+}
 
 els.srcCanvas.addEventListener('click', (e) => {
   if (!state.img || state.corners.length >= 4) return;
@@ -91,6 +164,7 @@ els.srcCanvas.addEventListener('click', (e) => {
   state.corners.push({ x, y });
   drawSource();
   updateProcessBtn();
+  if (state.corners.length === 4) processImage();
 });
 
 function fitScale(natW, natH) {

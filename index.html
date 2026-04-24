@@ -9,7 +9,7 @@
 <body>
 <header>
   <h1>Tool Silhouette Tracer</h1>
-  <p class="sub">Upload photo of tools on backlit 1&quot; grid. Click 4 grid corners (TL, TR, BR, BL). Outputs JPG of outlines scaled to real size.</p>
+  <p class="sub">Upload photo of tools on backlit 1&quot; grid. Grid auto-detected. Outputs 1:1 SVG/JPG of outlines for waterjet foam cutting.</p>
 </header>
 
 <main>
@@ -24,8 +24,8 @@
   </section>
 
   <section class="panel">
-    <h2>2. Click 4 corners</h2>
-    <p class="hint">Order: <b>Top-Left → Top-Right → Bottom-Right → Bottom-Left</b>. <button id="resetCorners">Reset</button></p>
+    <h2>2. Grid detection</h2>
+    <p class="hint">Grid auto-detected on upload. <button id="redetect">Re-detect</button> <button id="resetCorners">Clear</button> If wrong, click 4 corners manually: <b>TL → TR → BR → BL</b>. <span id="detectStatus"></span></p>
     <div class="canvas-wrap">
       <canvas id="srcCanvas"></canvas>
     </div>
