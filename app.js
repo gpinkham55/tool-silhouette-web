@@ -1,6 +1,8 @@
 // Tool Silhouette Tracer — client-side OpenCV.js pipeline.
-// Output is CAM-ready: outlines only (no grid/HUD/original in export).
-// SVG export uses true inch units for waterjet toolpaths.
+// Mirrors the Python reference pipeline: warp → Otsu → morph open/close → CHAIN_APPROX_NONE.
+// SVG export uses mm units + <polygon> tags to match CAM-ready reference format.
+
+const MM_PER_INCH = 25.4;
 
 const els = {
   file: document.getElementById('fileInput'),
@@ -11,10 +13,11 @@ const els = {
   outCanvas: document.getElementById('outCanvas'),
   reset: document.getElementById('resetCorners'),
   blur: document.getElementById('blur'),
-  thresh: document.getElementById('thresh'),
+  threshOff: document.getElementById('threshOff'),
   margin: document.getElementById('margin'),
   minArea: document.getElementById('minArea'),
-  smooth: document.getElementById('smooth'),
+  morphOpen: document.getElementById('morphOpen'),
+  morphClose: document.getElementById('morphClose'),
   invert: document.getElementById('invert'),
   includeBorder: document.getElementById('includeBorder'),
   showOrig: document.getElementById('showOrig'),
@@ -25,18 +28,19 @@ const els = {
   cvStatus: document.getElementById('cvStatus'),
   countHud: document.getElementById('countHud'),
   blurV: document.getElementById('blurV'),
-  threshV: document.getElementById('threshV'),
+  threshOffV: document.getElementById('threshOffV'),
   marginV: document.getElementById('marginV'),
   minAreaV: document.getElementById('minAreaV'),
-  smoothV: document.getElementById('smoothV'),
+  morphOpenV: document.getElementById('morphOpenV'),
+  morphCloseV: document.getElementById('morphCloseV'),
 };
 
 const state = {
   img: null,
   srcMat: null,
-  corners: [],        // TL, TR, BR, BL in image coords
+  corners: [],
   warped: null,
-  polygons: [],       // Array<Array<{x,y}>> in warped px — kept contours
+  polygons: [],   // Array<Array<{x,y}>> dense pixel points in warped frame
   cvReady: false,
 };
 
@@ -51,7 +55,7 @@ window.onOpenCvReady = () => {
   }, 50);
 };
 
-for (const k of ['blur', 'thresh', 'margin', 'minArea', 'smooth']) {
+for (const k of ['blur','threshOff','margin','minArea','morphOpen','morphClose']) {
   els[k].addEventListener('input', () => { els[k + 'V'].textContent = els[k].value; });
 }
 
@@ -125,15 +129,16 @@ function updateProcessBtn() {
 }
 
 els.processBtn.addEventListener('click', processImage);
-
 ['invert','includeBorder','showOrig','showGrid'].forEach(id => {
   els[id].addEventListener('change', () => { if (state.warped) detect(); });
 });
-['blur','thresh','margin','minArea','smooth'].forEach(id => {
-  els[id].addEventListener('input', debounce(() => { if (state.warped) detect(); }, 120));
+['blur','threshOff','margin','minArea','morphOpen','morphClose'].forEach(id => {
+  els[id].addEventListener('input', debounce(() => { if (state.warped) detect(); }, 150));
 });
 
 function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+
+function odd(n) { n = n | 0; return Math.max(1, n | 1); }
 
 function processImage() {
   const tmp = document.createElement('canvas');
@@ -163,57 +168,70 @@ function processImage() {
   els.downloadSvgBtn.disabled = false;
 }
 
-// Run detection pipeline, store polygons, then render preview.
 function detect() {
   const W = state.warped.cols;
   const H = state.warped.rows;
-  let blur = parseInt(els.blur.value, 10);
-  if (blur % 2 === 0) blur += 1;
-  const thresh = parseInt(els.thresh.value, 10);
+  const blurK = odd(parseInt(els.blur.value, 10));
+  const threshOffset = parseInt(els.threshOff.value, 10);
   const margin = parseInt(els.margin.value, 10);
   const minArea = parseInt(els.minArea.value, 10);
-  const smoothPct = parseFloat(els.smooth.value); // 0..5 % of perimeter
+  const openK = parseInt(els.morphOpen.value, 10);
+  const closeK = parseInt(els.morphClose.value, 10);
   const invert = els.invert.checked;
 
   const gray = new cv.Mat();
   cv.cvtColor(state.warped, gray, cv.COLOR_RGBA2GRAY);
   const blurred = new cv.Mat();
-  cv.GaussianBlur(gray, blurred, new cv.Size(blur, blur), 0);
+  cv.GaussianBlur(gray, blurred, new cv.Size(blurK, blurK), 0);
+
+  // Otsu finds optimal threshold, then offset.
+  const otsuMat = new cv.Mat();
+  const otsuVal = cv.threshold(blurred, otsuMat, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+  otsuMat.delete();
+  const thrVal = Math.max(0, Math.min(255, Math.round(otsuVal + threshOffset)));
+
   const bin = new cv.Mat();
-  cv.threshold(blurred, bin, thresh, 255, invert ? cv.THRESH_BINARY_INV : cv.THRESH_BINARY);
+  cv.threshold(blurred, bin, thrVal, 255, invert ? cv.THRESH_BINARY_INV : cv.THRESH_BINARY);
+
+  // Morph open: kills thin grid lines + speckle.
+  if (openK > 0) {
+    const ks = odd(openK);
+    const k = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(ks, ks));
+    cv.morphologyEx(bin, bin, cv.MORPH_OPEN, k);
+    k.delete();
+  }
+  // Morph close: fills holes inside tools.
+  if (closeK > 0) {
+    const ks = odd(closeK);
+    const k = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(ks, ks));
+    cv.morphologyEx(bin, bin, cv.MORPH_CLOSE, k);
+    k.delete();
+  }
 
   const contours = new cv.MatVector();
   const hier = new cv.Mat();
-  cv.findContours(bin, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+  // CHAIN_APPROX_NONE: dense points matching reference SVG.
+  cv.findContours(bin, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE);
 
   const polys = [];
   for (let i = 0; i < contours.size(); i++) {
     const cnt = contours.get(i);
-    const area = cv.contourArea(cnt);
-    if (area < minArea) { cnt.delete(); continue; }
-    const rect = cv.boundingRect(cnt);
-    if (rect.x < margin || rect.y < margin ||
-        rect.x + rect.width > W - margin || rect.y + rect.height > H - margin) {
+    if (cv.contourArea(cnt) < minArea) { cnt.delete(); continue; }
+    const r = cv.boundingRect(cnt);
+    if (r.x <= margin || r.y <= margin ||
+        r.x + r.width >= W - margin || r.y + r.height >= H - margin) {
       cnt.delete(); continue;
     }
-    let simplified = cnt;
-    if (smoothPct > 0) {
-      const peri = cv.arcLength(cnt, true);
-      const epsilon = (smoothPct / 100) * peri;
-      simplified = new cv.Mat();
-      cv.approxPolyDP(cnt, simplified, epsilon, true);
-    }
-    const data = simplified.data32S;
-    const pts = [];
-    for (let k = 0; k < simplified.rows; k++) pts.push({ x: data[k*2], y: data[k*2+1] });
+    const data = cnt.data32S;
+    const pts = new Array(cnt.rows);
+    for (let k = 0; k < cnt.rows; k++) pts[k] = { x: data[k*2], y: data[k*2+1] };
     polys.push(pts);
-    if (simplified !== cnt) simplified.delete();
     cnt.delete();
   }
   gray.delete(); blurred.delete(); bin.delete(); contours.delete(); hier.delete();
 
   state.polygons = polys;
-  els.countHud.textContent = `${polys.length} outlines`;
+  els.countHud.textContent = `${polys.length} outlines · thr=${thrVal}`;
   renderPreview();
 }
 
@@ -256,16 +274,17 @@ function renderPreview() {
     }
   }
 
-  drawOutlines(ctx, state.polygons, {
-    border: els.includeBorder.checked, W, H,
-  });
+  drawOutlines(ctx, state.polygons, { border: els.includeBorder.checked, W, H });
 }
 
 function drawOutlines(ctx, polys, opts) {
   ctx.strokeStyle = '#000';
   ctx.fillStyle = 'transparent';
-  ctx.lineWidth = 1.5;
-  if (opts.border) ctx.strokeRect(0, 0, opts.W, opts.H);
+  if (opts.border) {
+    ctx.lineWidth = 2;
+    ctx.strokeRect(0, 0, opts.W, opts.H);
+  }
+  ctx.lineWidth = 1.2;
   for (const pts of polys) {
     if (pts.length < 2) continue;
     ctx.beginPath();
@@ -276,7 +295,6 @@ function drawOutlines(ctx, polys, opts) {
   }
 }
 
-// --- Clean export (no grid, no original, no HUD). JPG and SVG.
 function renderExportCanvas() {
   const W = state.warped.cols;
   const H = state.warped.rows;
@@ -289,32 +307,32 @@ function renderExportCanvas() {
   return c;
 }
 
+// Build SVG in mm units matching reference: <rect> + <g stroke><polygon/></g>.
 function buildSVG() {
-  const gridW = parseFloat(els.gridW.value);
-  const gridH = parseFloat(els.gridH.value);
-  const ppi = parseInt(els.ppi.value, 10);
+  const gridW_in = parseFloat(els.gridW.value);
+  const gridH_in = parseFloat(els.gridH.value);
+  const gridW_mm = gridW_in * MM_PER_INCH;
+  const gridH_mm = gridH_in * MM_PER_INCH;
   const W = state.warped.cols;
   const H = state.warped.rows;
-  const toIn = (v) => (v / ppi).toFixed(4);
+  const sx = gridW_mm / W;
+  const sy = gridH_mm / H;
 
-  const parts = [];
-  parts.push(`<?xml version="1.0" encoding="UTF-8"?>`);
-  parts.push(`<svg xmlns="http://www.w3.org/2000/svg" `
-    + `width="${gridW}in" height="${gridH}in" `
-    + `viewBox="0 0 ${gridW} ${gridH}" `
-    + `stroke="#000" fill="none" stroke-width="0.01">`);
+  const lines = [];
+  lines.push('<?xml version="1.0" encoding="UTF-8"?>');
+  lines.push(`<svg xmlns="http://www.w3.org/2000/svg" width="${gridW_mm}mm" height="${gridH_mm}mm" viewBox="0 0 ${gridW_mm} ${gridH_mm}">`);
   if (els.includeBorder.checked) {
-    parts.push(`<rect x="0" y="0" width="${gridW}" height="${gridH}"/>`);
+    lines.push(`  <rect x="0" y="0" width="${gridW_mm}" height="${gridH_mm}" fill="none" stroke="black" stroke-width="0.5"/>`);
   }
+  lines.push(`  <g fill="none" stroke="black" stroke-width="0.3">`);
   for (const pts of state.polygons) {
     if (pts.length < 2) continue;
-    let d = `M ${toIn(pts[0].x)} ${toIn(pts[0].y)}`;
-    for (let k = 1; k < pts.length; k++) d += ` L ${toIn(pts[k].x)} ${toIn(pts[k].y)}`;
-    d += ' Z';
-    parts.push(`<path d="${d}"/>`);
+    const coords = pts.map(p => `${(p.x * sx).toFixed(3)},${(p.y * sy).toFixed(3)}`).join(' ');
+    lines.push(`  <polygon points="${coords}"/>`);
   }
-  parts.push(`</svg>`);
-  return parts.join('\n');
+  lines.push(`  </g>`);
+  lines.push(`</svg>`);
+  return lines.join('\n');
 }
 
 els.downloadJpgBtn.addEventListener('click', () => {
