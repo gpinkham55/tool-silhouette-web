@@ -28,6 +28,7 @@ const els = {
   processBtn: document.getElementById('processBtn'),
   downloadJpgBtn: document.getElementById('downloadJpgBtn'),
   downloadSvgBtn: document.getElementById('downloadSvgBtn'),
+  undoBtn: document.getElementById('undoBtn'),
   cvStatus: document.getElementById('cvStatus'),
   countHud: document.getElementById('countHud'),
   blurV: document.getElementById('blurV'),
@@ -45,6 +46,8 @@ const state = {
   corners: [],
   warped: null,
   polygons: [],   // Array<Array<{x,y}>> dense pixel points in warped frame
+  hoverIdx: -1,
+  undoStack: [],  // history of polygons arrays for undo
   cvReady: false,
 };
 
@@ -330,8 +333,15 @@ function detect() {
   gray.delete(); blurred.delete(); bin.delete(); contours.delete(); hier.delete();
 
   state.polygons = polys;
-  els.countHud.textContent = `${polys.length} outlines · thr=${thrVal} · +${parseFloat(els.offsetMm.value).toFixed(2)}mm`;
+  state.hoverIdx = -1;
+  state.undoStack = [];
+  els.undoBtn.disabled = true;
+  updateHud();
   renderPreview();
+}
+
+function updateHud() {
+  els.countHud.textContent = `${state.polygons.length} outlines · +${parseFloat(els.offsetMm.value).toFixed(2)}mm`;
 }
 
 function renderPreview() {
@@ -372,7 +382,7 @@ function renderPreview() {
     }
   }
 
-  drawOutlines(ctx, state.polygons, { border: els.includeBorder.checked, W, H });
+  drawOutlines(ctx, state.polygons, { border: els.includeBorder.checked, W, H, hoverIdx: state.hoverIdx });
 }
 
 function drawOutlines(ctx, polys, opts) {
@@ -383,13 +393,26 @@ function drawOutlines(ctx, polys, opts) {
     ctx.strokeRect(0, 0, opts.W, opts.H);
   }
   ctx.lineWidth = 1.2;
-  for (const pts of polys) {
+  const hi = opts.hoverIdx;
+  for (let i = 0; i < polys.length; i++) {
+    const pts = polys[i];
     if (pts.length < 2) continue;
     ctx.beginPath();
     ctx.moveTo(pts[0].x, pts[0].y);
     for (let k = 1; k < pts.length; k++) ctx.lineTo(pts[k].x, pts[k].y);
     ctx.closePath();
-    ctx.stroke();
+    if (i === hi) {
+      ctx.fillStyle = 'rgba(239,68,68,0.35)';
+      ctx.fill();
+      ctx.strokeStyle = '#ef4444';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 1.2;
+      ctx.fillStyle = 'transparent';
+    } else {
+      ctx.stroke();
+    }
   }
 }
 
@@ -432,6 +455,81 @@ function buildSVG() {
   lines.push(`</svg>`);
   return lines.join('\n');
 }
+
+// --- Interactive delete: hover highlights, click deletes.
+function outCanvasToPx(e) {
+  const rect = els.outCanvas.getBoundingClientRect();
+  const sx = state.warped ? state.warped.cols / rect.width : 1;
+  const sy = state.warped ? state.warped.rows / rect.height : 1;
+  return { x: (e.clientX - rect.left) * sx, y: (e.clientY - rect.top) * sy };
+}
+
+function pointInPoly(x, y, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i].x, yi = poly[i].y;
+    const xj = poly[j].x, yj = poly[j].y;
+    if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) inside = !inside;
+  }
+  return inside;
+}
+
+function hitTest(x, y) {
+  // Prefer smallest polygon containing point (handles nested).
+  let bestIdx = -1, bestArea = Infinity;
+  for (let i = 0; i < state.polygons.length; i++) {
+    const p = state.polygons[i];
+    if (!pointInPoly(x, y, p)) continue;
+    // approximate area via bounding box
+    let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+    for (const pt of p) { if(pt.x<minX)minX=pt.x; if(pt.y<minY)minY=pt.y; if(pt.x>maxX)maxX=pt.x; if(pt.y>maxY)maxY=pt.y; }
+    const a = (maxX-minX) * (maxY-minY);
+    if (a < bestArea) { bestArea = a; bestIdx = i; }
+  }
+  return bestIdx;
+}
+
+els.outCanvas.addEventListener('mousemove', (e) => {
+  if (!state.warped) return;
+  const { x, y } = outCanvasToPx(e);
+  const idx = hitTest(x, y);
+  if (idx !== state.hoverIdx) {
+    state.hoverIdx = idx;
+    els.outCanvas.style.cursor = idx >= 0 ? 'pointer' : 'default';
+    renderPreview();
+  }
+});
+
+els.outCanvas.addEventListener('mouseleave', () => {
+  if (state.hoverIdx !== -1) { state.hoverIdx = -1; renderPreview(); }
+});
+
+els.outCanvas.addEventListener('click', () => {
+  if (state.hoverIdx < 0) return;
+  state.undoStack.push(state.polygons.slice());
+  if (state.undoStack.length > 50) state.undoStack.shift();
+  state.polygons = state.polygons.filter((_, i) => i !== state.hoverIdx);
+  state.hoverIdx = -1;
+  els.undoBtn.disabled = false;
+  updateHud();
+  renderPreview();
+});
+
+els.undoBtn.addEventListener('click', () => {
+  if (!state.undoStack.length) return;
+  state.polygons = state.undoStack.pop();
+  els.undoBtn.disabled = state.undoStack.length === 0;
+  updateHud();
+  renderPreview();
+});
+
+// Keyboard shortcut: Ctrl+Z.
+window.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !els.undoBtn.disabled) {
+    e.preventDefault();
+    els.undoBtn.click();
+  }
+});
 
 els.downloadJpgBtn.addEventListener('click', () => {
   const c = renderExportCanvas();
