@@ -1,0 +1,25 @@
+* { box-sizing: border-box; }
+body {
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  margin: 0; padding: 0; background: #111; color: #eee;
+}
+header { padding: 16px 24px; background: #1a1a1a; border-bottom: 1px solid #333; }
+header h1 { margin: 0 0 4px; font-size: 22px; }
+header .sub { margin: 0; color: #aaa; font-size: 13px; }
+main { display: grid; grid-template-columns: 1fr; gap: 16px; padding: 16px 24px; max-width: 1400px; margin: 0 auto; }
+.panel { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 14px 18px; }
+.panel h2 { margin: 0 0 10px; font-size: 15px; color: #ddd; font-weight: 600; }
+.row { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin-top: 8px; }
+.row label { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #ccc; }
+.row input[type=number] { width: 70px; background: #222; color: #eee; border: 1px solid #333; padding: 4px 6px; border-radius: 3px; }
+.row input[type=range] { width: 140px; }
+.row span { min-width: 32px; color: #9cf; font-variant-numeric: tabular-nums; }
+button { background: #2563eb; color: white; border: 0; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+button:disabled { background: #444; color: #888; cursor: not-allowed; }
+button:hover:not(:disabled) { background: #1d4ed8; }
+input[type=file] { color: #ccc; }
+.hint { font-size: 12px; color: #999; margin: 4px 0 8px; }
+.canvas-wrap { overflow: auto; max-height: 70vh; border: 1px solid #333; background: #000; }
+canvas { display: block; cursor: crosshair; }
+#outCanvas { cursor: default; background: #fff; }
+footer { padding: 10px 24px; color: #888; font-size: 12px; border-top: 1px solid #333; }
