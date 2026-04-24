@@ -19,7 +19,7 @@ button:disabled { background: #444; color: #888; cursor: not-allowed; }
 button:hover:not(:disabled) { background: #1d4ed8; }
 input[type=file] { color: #ccc; }
 .hint { font-size: 12px; color: #999; margin: 4px 0 8px; }
-.canvas-wrap { overflow: auto; max-height: 70vh; border: 1px solid #333; background: #000; }
-canvas { display: block; cursor: crosshair; }
+.canvas-wrap { overflow: hidden; border: 1px solid #333; background: #000; display: flex; justify-content: center; }
+canvas { display: block; cursor: crosshair; max-width: 100%; max-height: 100%; }
 #outCanvas { cursor: default; background: #fff; }
 footer { padding: 10px 24px; color: #888; font-size: 12px; border-top: 1px solid #333; }

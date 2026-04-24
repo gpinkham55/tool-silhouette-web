@@ -93,11 +93,16 @@ els.srcCanvas.addEventListener('click', (e) => {
   updateProcessBtn();
 });
 
+function fitScale(natW, natH) {
+  const maxW = Math.min(1400, window.innerWidth - 80);
+  const maxH = window.innerHeight - 180;
+  return Math.min(1, maxW / natW, maxH / natH);
+}
+
 function drawSource() {
   if (!state.img) return;
   const c = els.srcCanvas;
-  const maxW = Math.min(1200, window.innerWidth - 80);
-  const scale = Math.min(1, maxW / state.img.naturalWidth);
+  const scale = fitScale(state.img.naturalWidth, state.img.naturalHeight);
   c.width = state.img.naturalWidth;
   c.height = state.img.naturalHeight;
   c.style.width = (state.img.naturalWidth * scale) + 'px';
@@ -139,6 +144,11 @@ els.processBtn.addEventListener('click', processImage);
 });
 
 function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+
+window.addEventListener('resize', debounce(() => {
+  if (state.img) drawSource();
+  if (state.warped) renderPreview();
+}, 150));
 
 function odd(n) { n = n | 0; return Math.max(1, n | 1); }
 
@@ -258,8 +268,7 @@ function renderPreview() {
   const H = state.warped.rows;
   const out = els.outCanvas;
   out.width = W; out.height = H;
-  const maxW = Math.min(1200, window.innerWidth - 80);
-  const scale = Math.min(1, maxW / W);
+  const scale = fitScale(W, H);
   out.style.width = (W * scale) + 'px';
   out.style.height = (H * scale) + 'px';
   const ctx = out.getContext('2d');
