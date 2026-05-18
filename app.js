@@ -22,6 +22,7 @@ const els = {
   morphClose: document.getElementById('morphClose'),
   offsetMm: document.getElementById('offsetMm'),
   invert: document.getElementById('invert'),
+  detectHoles: document.getElementById('detectHoles'),
   includeBorder: document.getElementById('includeBorder'),
   showOrig: document.getElementById('showOrig'),
   showGrid: document.getElementById('showGrid'),
@@ -213,7 +214,7 @@ function updateProcessBtn() {
 }
 
 els.processBtn.addEventListener('click', processImage);
-['invert','includeBorder','showOrig','showGrid'].forEach(id => {
+['invert','detectHoles','includeBorder','showOrig','showGrid'].forEach(id => {
   els[id].addEventListener('change', () => { if (state.warped) detect(); });
 });
 ['blur','threshOff','margin','minArea','morphOpen','morphClose','offsetMm'].forEach(id => {
@@ -312,16 +313,23 @@ function detect() {
 
   const contours = new cv.MatVector();
   const hier = new cv.Mat();
-  // CHAIN_APPROX_NONE: dense points matching reference SVG.
-  cv.findContours(bin, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE);
+  // CCOMP: 2-level hierarchy — outer contours (parent=-1) + inner holes (parent>=0).
+  // CHAIN_APPROX_NONE: dense points for smooth toolpaths.
+  cv.findContours(bin, contours, hier, cv.RETR_CCOMP, cv.CHAIN_APPROX_NONE);
 
+  const hData = hier.data32S; // [next, prev, child, parent] per contour
+  const detectHoles = els.detectHoles.checked;
   const polys = [];
   for (let i = 0; i < contours.size(); i++) {
     const cnt = contours.get(i);
+    const parent = hData[i*4 + 3];
+    const isHole = parent >= 0;
+    if (isHole && !detectHoles) { cnt.delete(); continue; }
     if (cv.contourArea(cnt) < minArea) { cnt.delete(); continue; }
     const r = cv.boundingRect(cnt);
-    if (r.x <= margin || r.y <= margin ||
-        r.x + r.width >= W - margin || r.y + r.height >= H - margin) {
+    // Edge margin only for outer contours — inner holes can sit anywhere.
+    if (!isHole && (r.x <= margin || r.y <= margin ||
+        r.x + r.width >= W - margin || r.y + r.height >= H - margin)) {
       cnt.delete(); continue;
     }
     const data = cnt.data32S;
